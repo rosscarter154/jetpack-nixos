@@ -29,8 +29,13 @@ let
   inherit (lib)
     filter
     getAttr
+    hasInfix
+    makeBinPath
     optionalAttrs
+    replaceStrings
     ;
+
+  inherit (builtins) unsafeDiscardStringContext;
 
   inherit (prevCudaPackages) cudaMajorMinorVersion;
 
@@ -75,9 +80,12 @@ let
   targetCudaPackages = getAttr (_cuda.lib.mkVersionedName "cudaPackages" cudaMajorMinorVersion) pkgs.targetPackages;
   targetBackendStdenv = targetCudaPackages.backendStdenv;
 
-  # NVCC accepts the path to a host compiler executable in place of a directory, which lets us use the cross-compiler's
-  # prefixed binaries. NVCC uses the host compiler for both C and C++, so we point it at the C++ compiler.
-  targetHostCompiler = "${targetBackendStdenv.cc}/bin/${targetBackendStdenv.cc.targetPrefix}c++";
+  targetHostCompilerBindir = pkgs.runCommand "nvcc-host-compiler-${targetBackendStdenv.cc.name}" { } ''
+    mkdir -p "$out/bin"
+    for prog in ${targetBackendStdenv.cc}/bin/${targetBackendStdenv.cc.targetPrefix}*; do
+      ln -s "$prog" "$out/bin/''${prog##*/${targetBackendStdenv.cc.targetPrefix}}"
+    done
+  '';
 
   retargetCudaNvcc = drv: drv.overrideAttrs (prevAttrs: {
     # NVCC provides headers required by host code which includes the CUDA runtime headers (e.g., crt/host_config.h).
@@ -87,13 +95,15 @@ let
 
     setupHook = ./cuda-cross-nvcc-hook.sh;
 
-    postInstall = prevAttrs.postInstall or "" + ''
-      nixLog "setting compiler-bindir to ${targetHostCompiler} in nvcc.profile"
-      substituteInPlace "''${!outputBin:?}/bin/nvcc.profile" \
-        --replace-fail \
-          "compiler-bindir = ${targetBackendStdenv.cc}/bin" \
-          "compiler-bindir = ${targetHostCompiler}"
-    '';
+    postInstall =
+      let
+        targetHostCompilerBinPath = makeBinPath [ targetBackendStdenv.cc ];
+        hasPrevPostInstallInfix = infix:
+          hasInfix (unsafeDiscardStringContext infix) (unsafeDiscardStringContext prevAttrs.postInstall);
+      in
+      assert hasPrevPostInstallInfix "compiler-bindir = ${targetHostCompilerBinPath}";
+      assert hasPrevPostInstallInfix "--prefix PATH : ${targetHostCompilerBinPath}";
+      replaceStrings [ targetHostCompilerBinPath ] [ "${targetHostCompilerBindir}/bin" ] prevAttrs.postInstall;
   });
 
   # NOTE: The x86_64 NVCC release for JetPack 5 is only available as a debian installer from NVIDIA's x86_64 Jetson

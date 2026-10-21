@@ -85,6 +85,8 @@ let
     # consumers' buildInputs, making its headers available to the host compiler.
     depsTargetTargetPropagated = prevAttrs.depsTargetTargetPropagated or [ ] ++ [ targetCudaPackages.cuda_nvcc ];
 
+    setupHook = ./cuda-cross-nvcc-hook.sh;
+
     postInstall = prevAttrs.postInstall or "" + ''
       nixLog "setting compiler-bindir to ${targetHostCompiler} in nvcc.profile"
       substituteInPlace "''${!outputBin:?}/bin/nvcc.profile" \
